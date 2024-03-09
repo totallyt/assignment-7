@@ -1,0 +1,276 @@
+```{r}
+install.packages("lidR")
+library(units)
+library(lidR)
+library(terra)
+library(mapview)
+
+
+plot_crossection <- function(las,
+                             p1 = c(min(las@data$X), mean(las@data$Y)),
+                             p2 = c(max(las@data$X), mean(las@data$Y)),
+                             width = 4, colour_by = NULL)
+{
+  require(ggplot2)
+  colour_by <- rlang::enquo(colour_by)
+  data_clip <- clip_transect(las, p1, p2, width)
+  p <- ggplot(data_clip@data, aes(X,Z)) + 
+    geom_point(size = 0.5) + 
+    coord_equal() + 
+    theme_minimal()
+  
+  if (!is.null(colour_by))
+    p <- p + 
+    aes(color = !!colour_by) + labs(color = "")
+  
+  return(p)
+}
+```
+```{r}
+LASfile <- "Tanya Brouwers.las"
+las <- readLAS(LASfile)
+las
+```
+#a How many points does your las file have? My file has 1.5 million points.
+```{r}
+View(las)
+plot(las)
+```
+
+#b.	What is the maximum elevation within your point cloud? Provide a line of code to determine this?
+
+```{r}
+las_select <- readLAS(LASfile, select = "xyzrn")
+maxElevation <- max(las@data$Z)
+print(maxElevation)
+```
+#my max elevation is 1357.14
+
+#2 a.	Classify ground points using the cloth simulated function (CSF) algorithm and produce a DEM using the triangular irregular network (TIN) algorithm.
+
+```{r}
+las_ground <- classify_ground(las, algorithm = csf())
+print(las_ground)
+```
+
+```{r}
+
+plot_crossection(las_ground, colour_by = factor(Classification))
+```
+```{r}
+mycsf <- csf(sloop_smooth = TRUE, class_threshold = 1, cloth_resolution = 1,
+             time_step = 1)
+las_ground <- classify_ground(las, algorithm = mycsf)
+plot_crossection(las_ground, colour_by = factor(Classification))
+```
+
+```{r}
+dem <- rasterize_terrain(las_ground, res = 1, algorithm = tin())
+```
+
+
+# question 2b
+```{r}
+
+las_ground <- classify_ground(las, algorithm = pmf(ws=5, th=3))
+plot(las_ground) 
+plot_crossection(las_ground, colour_by = factor(Classification))
+ws <- seq(3, 12, 3)
+th <- seq(0.1, 1.5, length.out = length(ws))
+las_ground <- classify_ground(las, algorithm = pmf(ws = ws, th = th))
+plot_crossection(las_ground, colour_by = factor(Classification))
+dem_pmf <- rasterize_terrain(las_ground, res = 1, algorithm = tin())
+```
+
+# question 2c
+```{r}
+las_ground <- classify_ground(las, algorithm = csf())
+dem_idw <- rasterize_terrain(las_ground, algorithm = knnidw(k = 10L, p = 2))
+plot_dtm3d(dem_idw, bg = "white") 
+```
+
+question 2	Briefly describe how the PMF algorithm works. 
+
+PMF is a method for separating ground and non-ground points in LiDAR data, which is essential for generating accurate Digital Elevation Models (DEMs). The algorithm was designed to deal with the complexities of varying terrain types and vegetation cover by applying a series of morphological filters that progressively remove non-ground points based on their elevation and the spatial characteristics of their surrounding points.
+
+The algorithm begins with the entire LiDAR point cloud, which includes both ground points (e.g., soil, rock) and non-ground points (e.g., vegetation, buildings). After each filtering step, a height threshold is used to classify points as ground or non-ground. Points that are significantly higher than the filtered surface are classified as non-ground. The threshold can be adjusted based on the specific characteristics of the dataset and the desired level of detail in the DEM.
+
+The process of applying the morphological filter with progressively smaller window sizes and classifying points based on height thresholds is repeated iteratively. The iteration continues until there are no significant changes between iterations, indicating that the algorithm has converged and successfully separated ground from non-ground points.
+
+
+
+question 3
+a.	Normalize the point cloud using the inverse distance weighting algorithm, and then produce a CHM using the point-to-raster algorithm.
+
+```{r}
+las_norm <- normalize_height(las_ground, algorithm = knnidw(k = 10L, p = 2))
+gnd_norm <- filter_ground(las_norm)
+plot(gnd_norm)
+View(las_norm@data) # Notice the addition of a new column "Zref"
+plot(las_norm)
+chm <- rasterize_canopy(las_norm, res = 1, algorithm = p2r())
+col <- height.colors(25)
+plot(chm, col = col)
+```
+
+b.	Normalize the point cloud using the TIN algorithm and then produce a CHM using the TIN algorithm as well (i.e.: the “dsmtin” algorithm).
+
+```{r}
+las_select <- readLAS(LASfile, select = "xyzrn")
+las_norm_tin <- normalize_height(las_ground, tin())
+gnd_norm <- filter_ground(las_norm_tin)
+plot(gnd_norm)
+chm <- rasterize_canopy(las_norm_tin, res = 1, algorithm = dsmtin(max_edge = 5))
+col <- height.colors(25)
+plot(chm, col = col)
+```
+c.	Normalize the point cloud using the TIN algorithm, and then produce a CHM using the point-to-raster algorithm.
+
+```{r}
+las_norm_tin <- normalize_height(las_ground, tin())
+gnd_norm <- filter_ground(las_norm_tin)
+plot(gnd_norm)
+chm_p2r <- rasterize_canopy(las_norm_tin, res = 1, algorithm = p2r())
+col <- height.colors(25)
+plot(chm, col = col)
+```
+
+d.	Briefly describe how the inverse distance weighting algorithm works.
+
+The IDW algorithm is one of the most commonly used spatial interpolation methods in Geosciences, which calculates the prediction values of unknown points (interpolated points) by weighting the average of the values of known points (data points).This method is grounded in the assumption that things that are closer to one another are more alike than those that are further apart. 
+
+4.	Choose one of the three normalization/CHM combinations from question three to move forward with.
+
+a.	Perform individual tree segmentation (ITS) of the normalized point cloud using the Dalponte 2016 algorithm.
+
+```{r}
+las_norm <- normalize_height(las_ground, algorithm = knnidw(k = 10L, p = 2))
+gnd_norm <- filter_ground(las_norm)
+plot(gnd_norm)
+View(las_norm@data) # Notice the addition of a new column "Zref"
+plot(las_norm)
+chm <- rasterize_canopy(las_norm, res = 1, algorithm = p2r())
+col <- height.colors(25)
+plot(chm, col = col)
+treetops <- locate_trees(chm, lmf(5))
+las_its_dalponte <- segment_trees(las_norm, dalponte2016(chm,
+  treetops, 
+  th_tree = 2,
+  th_seed = 0.45,
+  th_cr = 0.55,
+  max_cr = 10,
+  ID = "treeID"))
+plot(las_its_dalponte, color = "treeID")
+```
+
+b.	Perform ITS of the normalized point cloud using the Li et al. 2012 algorithm.
+
+```{r}
+las_norm <- normalize_height(las_ground, algorithm = knnidw(k = 10L, p = 2))
+gnd_norm <- filter_ground(las_norm)
+plot(gnd_norm)
+View(las_norm@data) # Notice the addition of a new column "Zref"
+plot(las_norm)
+chm <- rasterize_canopy(las_norm, res = 1, algorithm = p2r())
+col <- height.colors(25)
+plot(chm, col = col)
+treetops <- locate_trees(chm, lmf(5))
+las_its_li <- segment_trees(las_norm, li2012())
+plot(las_its_li, color = "treeID")
+```
+
+
+c.	Perform ITS of the normalized point cloud using the Silva 2016 algorithm.
+
+```{r}
+las_norm <- normalize_height(las_ground, algorithm = knnidw(k = 10L, p = 2))
+gnd_norm <- filter_ground(las_norm)
+plot(gnd_norm)
+View(las_norm@data) # Notice the addition of a new column "Zref"
+plot(las_norm)
+chm <- rasterize_canopy(las_norm, res = 1, algorithm = p2r())
+col <- height.colors(25)
+plot(chm, col = col)
+treetops <- locate_trees(chm, lmf(5))
+las_its_silva <- segment_trees(las_norm, silva2016(chm, treetops, max_cr_factor = 0.6, exclusion = 0.3, ID = "treeID"))
+plot(las_its_silva, color = "treeID")
+```
+
+d.	Briefly describe how the Silva 2016 algorithm works.
+
+This algorithm is designed for individual tree segmentation and aims to delineate individual tree crowns from airborne point clouds.  It starts by creating a CHM from the point cloud.  Then, watershed segmentation is used to
+delineate crowns. "Peaks" that correspond to crowns are identified and then "flooding" is used to define boundaries between individual tree crowns based on the topography of the canopy surface represented in the CHM.
+
+One of the key contributions of the Silva 2016 algorithm is its approach to refining the initial segmentation produced by the watershed method. It more effectively deals with over- and under-segmentation to more accurately represent tree crowns.
+
+The result of the Silva 2016 algorithm is a set of delineated tree crowns, each associated with a segment of the CHM that represents an individual tree. These segments can be analyzed to extract various metrics related to the trees, such as crown area, crown volume, and tree height.
+
+The Silva 2016 algorithm is particularly appreciated for its robustness in diverse forest conditions and its ability to handle complex canopy structures.
+
+5.	Retrieve the crown metrics for each of the tree segmented point clouds produced in number 4. How many trees were identified in each algorithm? What is the overall tree density in each of the segmented point clouds?
+
+```{r}
+stdtreemetrics
+metrics_silva <- crown_metrics(las_its_silva, .stdtreemetrics)
+mapview(metrics_silva, zcol = "treeID")
+n_trees <- set_units(nrow(metrics_silva), "stems")
+st_area(las_its_silva)
+pc_area <- set_units(st_area(las_its_silva), "ha")
+n_trees / pc_area
+round(n_trees / pc_area)
+```
+
+```{r}
+stdtreemetrics
+metrics_li <- crown_metrics(las_its_li, .stdtreemetrics)
+mapview(metrics_li, zcol = "treeID")
+n_trees <- set_units(nrow(metrics_li), "stems")
+st_area(las_its_li)
+pc_area <- set_units(st_area(las_its_li), "ha")
+n_trees / pc_area
+round(n_trees / pc_area)
+```
+
+
+```{r}
+stdtreemetrics
+metrics_dalponte <- crown_metrics(las_its_dalponte, .stdtreemetrics)
+mapview(metrics_dalponte, zcol = "treeID")
+n_trees <- set_units(nrow(metrics_dalponte), "stems")
+st_area(las_its_dalponte)
+pc_area <- set_units(st_area(las_its_dalponte), "ha")
+n_trees / pc_area
+round(n_trees / pc_area)
+```
+Results: Da Silva: 1400 stems, 287 stems/ha
+Li 2012: 2475 stems, 508 stems/ha
+Dalponte: 1400 stems, 287 stems/ha
+
+Part 2
+
+1.	Isolate the tallest tree in one of the segmented point clouds. How many points are there that make up this particular tree? 1355 points
+2.	What is the crown area of the tallest tree? What about the crown area of the shortest tree? 44 m2 and 15 m2
+3.	Plot this point cloud coloring the points by their treeID.
+
+```{r}
+library(tidyverse)
+metrics <- crown_metrics(las_its_silva, .stdtreemetrics)
+tall_trees <- metrics %>% 
+  filter(Z > 20)
+mapview(tall_trees)
+metrics <- crown_metrics(las_its_silva, .stdtreemetrics, geom = "concave")
+mapview(metrics)
+tallest_tree <- metrics %>% 
+  arrange(desc(Z)) %>% 
+  slice(1)
+tallest_tree_crown_area <- tallest_tree$convhull_area
+print(tallest_tree_crown_area)
+shortest_tree <- metrics %>% 
+  arrange(Z) %>% 
+  slice(1)
+shortest_tree <- shortest_tree$convhull_area
+print(shortest_tree)
+plot(las_its_silva, color = "treeID")
+
+```
+
